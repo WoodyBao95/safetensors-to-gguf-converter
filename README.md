@@ -29,9 +29,20 @@
 
 - macOS 10.15+ (Apple Silicon)
 - Python 3.8+（系统自带或通过 Homebrew 安装）
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) 已编译
+- [llama.cpp](https://github.com/ggerganov/llama.cpp)（可通过应用内一键下载编译）
 
-### 编译 llama.cpp
+### 准备 llama.cpp
+
+#### 方式一：应用内一键下载编译（推荐）
+
+1. 打开应用，找到「llama.cpp 路径」区域
+2. 点击 **⬇ 下载 llama.cpp** 按钮，自动从 GitHub 下载源码到 `~/Downloads/llama.cpp`
+3. 下载完成后，点击 **⚙ 编译 llama.cpp** 按钮，自动编译（需要 cmake）
+4. 编译完成后，路径会自动填入
+
+> 注：编译需要 cmake，可通过 `pip install cmake` 安装
+
+#### 方式二：手动编译
 
 ```bash
 git clone https://github.com/ggerganov/llama.cpp.git
@@ -44,7 +55,7 @@ python3 -m cmake --build build --config Release
 ### 转换步骤
 
 1. **打开应用** — 双击 `SafeTensors to GGUF.app`
-2. **选择 llama.cpp 目录** — 包含 `convert_hf_to_gguf.py` 和 `build/bin/llama-quantize` 的根目录
+2. **选择 llama.cpp 目录** — 包含 `convert_hf_to_gguf.py` 和 `build/bin/llama-quantize` 的根目录（或使用上述一键下载编译）
 3. **选择模型目录** — 包含 `.safetensors` 文件和 `config.json` 的文件夹（从 HuggingFace 或 ModelScope 下载的模型）
 4. **选择输出目录** — GGUF 文件保存位置（默认为模型目录）
 5. **选择量化类型** — 推荐 `Q4_K_M`（质量和大小的最佳平衡）

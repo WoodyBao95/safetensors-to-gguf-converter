@@ -11,6 +11,8 @@
 - 🔧 **26 种量化类型** — 支持 F16 / Q8_0 / Q6_K / Q5_K_M / Q4_K_M / Q3_K / Q2_K / IQ 系列等
 - 📊 **实时日志** — 转换过程实时显示进度和日志输出
 - ⏹️ **中途停止** — 支持随时取消转换操作
+- 🤖 **自动注入 Chat Template** — 检测缺少 chat template 的 Llama 3 模型并自动补全，解决模型对话不停止的问题
+- 🔑 **完整特殊 token** — 使用 `--special` 参数确保 `<|eot_id|>` 等所有特殊 token 写入 GGUF
 
 ## 下载安装
 
@@ -117,3 +119,20 @@ open "SafeTensors to GGUF.app"
 ## License
 
 MIT
+
+## 更新日志
+
+### v1.1.0 (2026-06-23)
+
+- 🐛 **修复: 模型对话不停止** — 转换时自动注入缺失的 chat template，解决 Llama 3 等模型在 llama-server 中无法正常停止的问题
+- ✨ **新增: `--special` 参数** — 转换时自动传入 `--special` 确保所有特殊 token（包括 `<|eot_id|>`、`<|start_header_id|>` 等）完整写入 GGUF
+- ✨ **新增: 自动检测 Llama 3 模型** — 当模型目录缺少 `chat_template` 时，自动检测架构并注入标准 Llama 3 chat template
+
+### v1.0.0 (2026-06-23)
+
+- 🎉 初始发布
+- 🖥️ macOS 图形化界面 (tkinter)
+- 📦 依赖内置，无需手动安装
+- 🔧 支持 26 种量化类型
+- 📊 实时日志输出
+- ⏹️ 支持中途停止

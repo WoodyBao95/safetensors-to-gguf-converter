@@ -383,6 +383,64 @@ class ConverterApp:
                     return str(p)
         return None
 
+    # ── Llama 3 标准 chat template ──
+    LLAMA3_CHAT_TEMPLATE = (
+        "{% set loop_messages = messages %}"
+        "{% for message in loop_messages %}"
+        "{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'"
+        "+ message['content'] | trim + '<|eot_id|>' %}"
+        "{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}"
+        "{{ content }}"
+        "{% endfor %}"
+        "{% if add_generation_prompt %}"
+        "{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}"
+        "{% endif %}"
+    )
+
+    def _inject_chat_template_if_needed(self, model_dir: Path, log) -> bool:
+        """检查模型是否缺少 chat template，如果是 Llama 3 模型则自动注入。返回是否注入了临时文件。"""
+        # 检查是否已有 chat template
+        has_template = False
+        config_path = model_dir / "tokenizer_config.json"
+        if config_path.exists():
+            try:
+                cfg = json.loads(config_path.read_text())
+                if cfg.get("chat_template"):
+                    has_template = True
+            except Exception:
+                pass
+        if (model_dir / "chat_template.jinja").exists():
+            has_template = True
+        if (model_dir / "chat_template.json").exists():
+            has_template = True
+
+        if has_template:
+            log("✓ 模型已包含 chat template", "info")
+            return False
+
+        # 检测是否为 Llama 3 架构
+        is_llama3 = False
+        if config_path.exists():
+            try:
+                cfg = json.loads(config_path.read_text())
+                model_type = cfg.get("model_type", "")
+                vocab_size = cfg.get("vocab_size", 0)
+                if model_type in ("llama",) and vocab_size == 128256:
+                    is_llama3 = True
+            except Exception:
+                pass
+
+        if not is_llama3:
+            log("⚠ 模型缺少 chat template，但非 Llama 3 架构，跳过自动注入", "warn")
+            return False
+
+        # 注入 Llama 3 标准 chat template
+        template_path = model_dir / "chat_template.jinja"
+        template_path.write_text(self.LLAMA3_CHAT_TEMPLATE)
+        log("✓ 检测到 Llama 3 模型缺少 chat template，已自动注入标准模板", "success")
+        log("  → 已创建临时文件: chat_template.jinja", "info")
+        return True
+
     def _run_conversion(self):
         llama_dir = Path(self.llama_cpp_path.get())
         model_dir = Path(self.model_path.get())
@@ -419,12 +477,15 @@ class ConverterApp:
         log(f"Python: {venv_python}")
         log("=" * 60)
 
+        # ── 检查并注入 chat template ──
+        injected_template = self._inject_chat_template_if_needed(model_dir, log)
+
         # ── 步骤 1: 转换 GGUF (F16) ──
         status("步骤 1/2: 转换格式中…", 0)
         log("步骤 1: 将 SafeTensors 转换为 GGUF (F16)…")
 
         f16_output = out_dir / f"{model_name}-f16.gguf"
-        cmd = [venv_python, str(convert_script), str(model_dir), "--outfile", str(f16_output)]
+        cmd = [venv_python, str(convert_script), str(model_dir), "--outfile", str(f16_output), "--special"]
         if use_outtype and quant_code in ("F16", "BF16"):
             cmd.extend(["--outtype", quant_code.lower()])
         log(f"执行: {' '.join(cmd)}", "cmd")
@@ -463,6 +524,14 @@ class ConverterApp:
             log(f"转换异常: {e}", "error")
             Q(self._finish, "转换失败")
             return
+        finally:
+            # 清理临时注入的 chat template
+            if injected_template:
+                try:
+                    (model_dir / "chat_template.jinja").unlink(missing_ok=True)
+                    log("已清理临时 chat template 文件", "info")
+                except Exception:
+                    pass
 
         # ── 步骤 2: 量化 ──
         if quant_code in ("F16", "BF16"):

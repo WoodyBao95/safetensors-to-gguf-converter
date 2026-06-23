@@ -12,15 +12,18 @@
 - 📊 **实时日志** — 转换过程实时显示进度和日志输出
 - ⏹️ **中途停止** — 支持随时取消转换操作
 
-## 下载
+## 下载安装
 
-从 [Releases](../../releases) 页面下载最新的 `SafeTensors to GGUF.app.zip`，解压后放到 `/Applications` 或 `~/Applications` 即可。
+从 [Releases](../../releases) 页面下载最新版本：
+
+- **`.dmg`** — 双击打开，将 app 拖入 Applications
+- **`.pkg`** — 双击运行安装向导，自动安装到 Applications
 
 ## 使用方法
 
 ### 前置条件
 
-- macOS 10.15+
+- macOS 10.15+ (Apple Silicon)
 - Python 3.8+（系统自带或通过 Homebrew 安装）
 - [llama.cpp](https://github.com/ggerganov/llama.cpp) 已编译
 

@@ -135,17 +135,22 @@ MIT
 
 ## 更新日志
 
-### v1.2.0 (2026-06-24)
-
-- ✨ **新增: 一键下载 llama.cpp** — 内置从 GitHub 下载 llama.cpp 源码功能，无需手动 git clone
-- ✨ **新增: 一键编译 llama.cpp** — 自动调用 cmake 配置和编译，实时显示编译日志
-- 🔧 **改进: llama.cpp 状态显示** — 实时显示下载/编译状态
-
 ### v1.1.0 (2026-06-24)
 
-- 🐛 **修复: 模型对话不停止** — 转换时自动注入缺失的 chat template，解决 Llama 3 等模型在 llama-server 中无法正常停止的问题
-- ✨ **新增: `--special` 参数** — 转换时自动传入 `--special` 确保所有特殊 token（包括 `<|eot_id|>`、`<|start_header_id|>` 等）完整写入 GGUF
-- ✨ **新增: 自动检测 Llama 3 模型** — 当模型目录缺少 `chat_template` 时，自动检测架构并注入标准 Llama 3 chat template
+#### 🐛 Bug 修复
+- **修复: 模型对话不停止** — 转换时自动注入缺失的 chat template，解决 Llama 3 等模型在 llama-server 中无法正常停止的问题
+- **修复: 下载/编译状态不更新** — 修复队列轮询未启动导致 UI 状态不刷新的问题
+- **修复: 停止后状态不正确** — 停止下载/编译后正确更新按钮状态和提示文字
+
+#### ✨ 新功能
+- **`--special` 参数** — 转换时自动传入 `--special` 确保所有特殊 token（包括 `<|eot_id|>`、`<|start_header_id|>` 等）完整写入 GGUF
+- **自动检测 Llama 3 模型** — 当模型目录缺少 `chat_template` 时，自动检测架构并注入标准 Llama 3 chat template
+- **一键下载 llama.cpp** — 内置从 GitHub 下载 llama.cpp 源码功能，无需手动 git clone
+- **一键编译 llama.cpp** — 自动调用 cmake 配置和编译，实时显示编译日志
+
+#### 🔧 改进
+- **llama.cpp 完整性校验** — 启动时自动检查状态，已有源码则跳过下载，编译完成则禁用按钮
+- **按钮状态联动** — 下载完成→下载按钮灰色，编译完成→两个按钮都灰色并显示「✓ llama.cpp 已就绪」
 
 ### v1.0.0 (2026-06-23)
 

@@ -180,13 +180,24 @@ class ConverterApp:
         self.lbl_python.pack(side=tk.RIGHT)
 
         # llama.cpp 路径
-        fr_llama = ttk.LabelFrame(left, text=" llama.cpp 路径 ", style="Section.TLabelframe", padding=8)
+        fr_llama = ttk.LabelFrame(left, text=" llama.cpp 路径", style="Section.TLabelframe", padding=8)
         fr_llama.pack(fill=tk.X, pady=(0, 6))
         row_llama = ttk.Frame(fr_llama)
         row_llama.pack(fill=tk.X)
         ttk.Entry(row_llama, textvariable=self.llama_cpp_path).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
         ttk.Button(row_llama, text="浏览…", command=self._browse_llama_cpp).pack(side=tk.RIGHT)
-        ttk.Label(fr_llama, text="包含 convert_hf_to_gguf.py 和 build/bin/llama-quantize",
+        # 下载和编译按钮
+        row_llama_btn = ttk.Frame(fr_llama)
+        row_llama_btn.pack(fill=tk.X, pady=(6, 0))
+        self.btn_download = ttk.Button(row_llama_btn, text="⬇ 下载 llama.cpp",
+                                       command=self._download_llama_cpp)
+        self.btn_download.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_compile = ttk.Button(row_llama_btn, text="⚙ 编译 llama.cpp",
+                                      command=self._compile_llama_cpp)
+        self.btn_compile.pack(side=tk.LEFT)
+        self.lbl_llama_status = ttk.Label(row_llama_btn, text="", foreground="gray")
+        self.lbl_llama_status.pack(side=tk.RIGHT)
+        ttk.Label(fr_llama, text="首次使用需下载并编译 llama.cpp（需要 cmake）",
                   foreground="gray").pack(anchor=tk.W, pady=(3, 0))
 
         # 模型目录
@@ -282,6 +293,209 @@ class ConverterApp:
         if d:
             self.output_path.set(d)
             self._save_config()
+
+    # --------------------------------------------------------
+    #  llama.cpp 下载 & 编译
+    # --------------------------------------------------------
+    def _set_llama_status(self, text, color="gray"):
+        self.lbl_llama_status.configure(text=text, foreground=color)
+
+    def _download_llama_cpp(self):
+        """下载 llama.cpp 到 ~/Downloads/llama.cpp"""
+        dest = Path.home() / "Downloads" / "llama.cpp"
+        if dest.exists() and (dest / "convert_hf_to_gguf.py").exists():
+            if not messagebox.askyesno("确认", f"llama.cpp 已存在于:\n{dest}\n\n是否删除重新下载？"):
+                return
+            shutil.rmtree(dest)
+
+        self.btn_download.configure(state=tk.DISABLED)
+        self.btn_compile.configure(state=tk.DISABLED)
+        self._set_llama_status("下载中…", "#cca700")
+        self.is_running = True
+        threading.Thread(target=self._run_download, args=(dest,), daemon=True).start()
+
+    def _run_download(self, dest: Path):
+        Q = self._qput
+        log = lambda msg, tag="info": Q(self._log, msg, tag)
+
+        log("=" * 60)
+        log("开始下载 llama.cpp…")
+        log(f"目标目录: {dest}")
+
+        # 尝试 git clone
+        git_bin = shutil.which("git")
+        if git_bin:
+            log("使用 git clone…")
+            cmd = [git_bin, "clone", "--depth", "1",
+                   "https://github.com/ggerganov/llama.cpp.git", str(dest)]
+            try:
+                self.process = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
+                )
+                for line in self.process.stdout:
+                    line = line.rstrip()
+                    if line:
+                        log(line)
+                self.process.wait()
+
+                if self.process.returncode == 0:
+                    log("✓ 下载完成！", "success")
+                    Q(self.llama_cpp_path.set, str(dest))
+                    Q(self._save_config)
+                    Q(self._set_llama_status, "下载完成", "#4ec9b0")
+                else:
+                    log(f"git clone 失败 (退出码: {self.process.returncode})", "error")
+                    Q(self._set_llama_status, "下载失败", "#f44747")
+            except Exception as e:
+                log(f"下载异常: {e}", "error")
+                Q(self._set_llama_status, "下载失败", "#f44747")
+        else:
+            log("未找到 git，请先安装 git 或手动下载 llama.cpp", "error")
+            Q(self._set_llama_status, "需要 git", "#f44747")
+
+        Q(self.btn_download.configure, {"state": tk.NORMAL})
+        Q(self.btn_compile.configure, {"state": tk.NORMAL})
+        self.is_running = False
+
+    def _compile_llama_cpp(self):
+        """编译 llama.cpp"""
+        llama_dir = Path(self.llama_cpp_path.get())
+        if not llama_dir.is_dir():
+            messagebox.showerror("错误", "请先设置有效的 llama.cpp 目录")
+            return
+        if not (llama_dir / "CMakeLists.txt").exists():
+            messagebox.showerror("错误", f"llama.cpp 目录中未找到 CMakeLists.txt:\n{llama_dir}")
+            return
+
+        self.btn_download.configure(state=tk.DISABLED)
+        self.btn_compile.configure(state=tk.DISABLED)
+        self._set_llama_status("编译中…", "#cca700")
+        self.is_running = True
+        threading.Thread(target=self._run_compile, args=(llama_dir,), daemon=True).start()
+
+    def _run_compile(self, llama_dir: Path):
+        Q = self._qput
+        log = lambda msg, tag="info": Q(self._log, msg, tag)
+
+        log("=" * 60)
+        log("开始编译 llama.cpp…")
+        log(f"源码目录: {llama_dir}")
+
+        # 找 cmake（优先 pip 安装的 cmake）
+        cmake_bin = shutil.which("cmake")
+        pip_cmake = Path(sys.prefix) / "bin" / "cmake"
+        if not cmake_bin and pip_cmake.exists():
+            cmake_bin = str(pip_cmake)
+        # 也检查 python3 -m cmake
+        if not cmake_bin:
+            try:
+                subprocess.run([sys.executable, "-m", "cmake", "--version"],
+                               capture_output=True, check=True)
+                cmake_bin = f"{sys.executable} -m cmake"
+            except Exception:
+                pass
+
+        if not cmake_bin:
+            log("未找到 cmake，请先安装: pip install cmake", "error")
+            Q(self._set_llama_status, "需要 cmake", "#f44747")
+            Q(self.btn_download.configure, {"state": tk.NORMAL})
+            Q(self.btn_compile.configure, {"state": tk.NORMAL})
+            self.is_running = False
+            return
+
+        # Step 1: cmake configure
+        log(f"\n步骤 1: cmake 配置…")
+        log(f"cmake: {cmake_bin}")
+        use_python_cmake = "python" in cmake_bin
+        if use_python_cmake:
+            cmd1 = [sys.executable, "-m", "cmake", "-B", "build",
+                    "-DCMAKE_BUILD_TYPE=Release"]
+        else:
+            cmd1 = [cmake_bin, "-B", "build", "-DCMAKE_BUILD_TYPE=Release"]
+
+        try:
+            self.process = subprocess.Popen(
+                cmd1, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1, cwd=str(llama_dir),
+            )
+            for line in self.process.stdout:
+                if not self.is_running:
+                    break
+                line = line.rstrip()
+                if line:
+                    tag = "error" if "error" in line.lower() else "info"
+                    log(line, tag)
+            self.process.wait()
+
+            if self.process.returncode != 0:
+                log(f"cmake 配置失败 (退出码: {self.process.returncode})", "error")
+                Q(self._set_llama_status, "编译失败", "#f44747")
+                Q(self.btn_download.configure, {"state": tk.NORMAL})
+                Q(self.btn_compile.configure, {"state": tk.NORMAL})
+                self.is_running = False
+                return
+
+            log("✓ cmake 配置完成", "success")
+        except Exception as e:
+            log(f"cmake 配置异常: {e}", "error")
+            Q(self._set_llama_status, "编译失败", "#f44747")
+            Q(self.btn_download.configure, {"state": tk.NORMAL})
+            Q(self.btn_compile.configure, {"state": tk.NORMAL})
+            self.is_running = False
+            return
+
+        # Step 2: cmake build
+        log(f"\n步骤 2: cmake 编译…")
+        if use_python_cmake:
+            cmd2 = [sys.executable, "-m", "cmake", "--build", "build",
+                    "--config", "Release"]
+        else:
+            cmd2 = [cmake_bin, "--build", "build", "--config", "Release"]
+
+        try:
+            self.process = subprocess.Popen(
+                cmd2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1, cwd=str(llama_dir),
+            )
+            for line in self.process.stdout:
+                if not self.is_running:
+                    break
+                line = line.rstrip()
+                if line:
+                    log(line)
+            self.process.wait()
+
+            if self.process.returncode != 0:
+                log(f"编译失败 (退出码: {self.process.returncode})", "error")
+                Q(self._set_llama_status, "编译失败", "#f44747")
+            else:
+                # 检查产物
+                quantize_bin = llama_dir / "build" / "bin" / "llama-quantize"
+                convert_py = llama_dir / "convert_hf_to_gguf.py"
+                ok = True
+                if not quantize_bin.exists():
+                    # 尝试 Release 子目录
+                    quantize_bin = llama_dir / "build" / "bin" / "Release" / "llama-quantize"
+                if not convert_py.exists():
+                    log("⚠ 未找到 convert_hf_to_gguf.py（可能在不同分支）", "warn")
+                if quantize_bin.exists():
+                    log(f"✓ llama-quantize: {quantize_bin}", "success")
+                else:
+                    log("⚠ 未找到 llama-quantize", "warn")
+                    ok = False
+                if ok:
+                    log("\n✓ 编译完成！", "success")
+                    Q(self._set_llama_status, "编译完成", "#4ec9b0")
+                else:
+                    Q(self._set_llama_status, "编译完成（部分缺失）", "#cca700")
+        except Exception as e:
+            log(f"编译异常: {e}", "error")
+            Q(self._set_llama_status, "编译失败", "#f44747")
+
+        Q(self.btn_download.configure, {"state": tk.NORMAL})
+        Q(self.btn_compile.configure, {"state": tk.NORMAL})
+        self.is_running = False
 
     # --------------------------------------------------------
     #  日志 & 队列

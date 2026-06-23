@@ -13,6 +13,8 @@
 - ⏹️ **中途停止** — 支持随时取消转换操作
 - 🤖 **自动注入 Chat Template** — 检测缺少 chat template 的 Llama 3 模型并自动补全，解决模型对话不停止的问题
 - 🔑 **完整特殊 token** — 使用 `--special` 参数确保 `<|eot_id|>` 等所有特殊 token 写入 GGUF
+- ⬇️ **一键下载 llama.cpp** — 内置从 GitHub 下载 llama.cpp 源码功能
+- ⚙️ **一键编译 llama.cpp** — 自动调用 cmake 编译，无需手动操作
 
 ## 下载安装
 
@@ -122,7 +124,13 @@ MIT
 
 ## 更新日志
 
-### v1.1.0 (2026-06-23)
+### v1.2.0 (2026-06-24)
+
+- ✨ **新增: 一键下载 llama.cpp** — 内置从 GitHub 下载 llama.cpp 源码功能，无需手动 git clone
+- ✨ **新增: 一键编译 llama.cpp** — 自动调用 cmake 配置和编译，实时显示编译日志
+- 🔧 **改进: llama.cpp 状态显示** — 实时显示下载/编译状态
+
+### v1.1.0 (2026-06-24)
 
 - 🐛 **修复: 模型对话不停止** — 转换时自动注入缺失的 chat template，解决 Llama 3 等模型在 llama-server 中无法正常停止的问题
 - ✨ **新增: `--special` 参数** — 转换时自动传入 `--special` 确保所有特殊 token（包括 `<|eot_id|>`、`<|start_header_id|>` 等）完整写入 GGUF

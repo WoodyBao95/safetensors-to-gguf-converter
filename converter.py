@@ -801,7 +801,7 @@ class ConverterApp:
         log("步骤 1: 将 SafeTensors 转换为 GGUF (F16)…")
 
         f16_output = out_dir / f"{model_name}-f16.gguf"
-        cmd = [venv_python, str(convert_script), str(model_dir), "--outfile", str(f16_output), "--special"]
+        cmd = [venv_python, str(convert_script), str(model_dir), "--outfile", str(f16_output)]
         if use_outtype and quant_code in ("F16", "BF16"):
             cmd.extend(["--outtype", quant_code.lower()])
         log(f"执行: {' '.join(cmd)}", "cmd")

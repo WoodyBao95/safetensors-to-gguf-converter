@@ -609,6 +609,15 @@ class ConverterApp:
         self.log_text.see(tk.END)
         self.log_text.configure(state=tk.DISABLED)
 
+    def _log_replace(self, msg, tag="info"):
+        """替换最后一行（用于进度条 \r 覆盖）"""
+        self.log_text.configure(state=tk.NORMAL)
+        # 删除最后一行
+        self.log_text.delete("end-2l linestart", "end-1l lineend")
+        self.log_text.insert(tk.END, msg, tag)
+        self.log_text.see(tk.END)
+        self.log_text.configure(state=tk.DISABLED)
+
     def _qput(self, func, *args):
         self._msg_queue.put((func, args))
 
@@ -699,25 +708,44 @@ class ConverterApp:
                     return str(p)
         return None
 
-    # ── Llama 3 标准 chat template ──
+    # ── Llama 3 chat template（适用于 Llama 3 架构模型）──
     LLAMA3_CHAT_TEMPLATE = (
         "{% set loop_messages = messages %}"
         "{% for message in loop_messages %}"
-        "{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'"
+        "{% set content = '<|start_header_id|>' + message['role'] + '<|end_header_id|>\\n\\n'"
         "+ message['content'] | trim + '<|eot_id|>' %}"
         "{% if loop.index0 == 0 %}{% set content = bos_token + content %}{% endif %}"
         "{{ content }}"
         "{% endfor %}"
         "{% if add_generation_prompt %}"
-        "{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}"
+        "{{ '<|start_header_id|>assistant<|end_header_id|>\\n\\n' }}"
         "{% endif %}"
     )
 
-    def _inject_chat_template_if_needed(self, model_dir: Path, log) -> bool:
-        """检查模型是否缺少 chat template，如果是 Llama 3 模型则自动注入。返回是否注入了临时文件。"""
+    def _inject_chat_template_if_needed(self, model_dir: Path, log) -> tuple[bool, bool]:
+        """检查模型是否缺少 eot_token，如果是则自动注入。
+        返回 (False, 是否修改了 tokenizer_config.json)。"""
+        config_path = model_dir / "tokenizer_config.json"
+        modified_config = False
+
+        # 检查并注入 eot_token
+        if config_path.exists():
+            try:
+                cfg = json.loads(config_path.read_text())
+                if not cfg.get("eot_token"):
+                    # 检查 added_tokens_decoder 中是否有 eot_id
+                    atd = cfg.get("added_tokens_decoder", {})
+                    has_eot = any(v.get("content") == "<|eot_id|>" for v in atd.values())
+                    if has_eot:
+                        cfg["eot_token"] = "<|eot_id|>"
+                        config_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                        log("✓ 已注入 eot_token 到 tokenizer_config.json", "success")
+                        modified_config = True
+            except Exception as e:
+                log(f"⚠ 检查 eot_token 失败: {e}", "warn")
+
         # 检查是否已有 chat template
         has_template = False
-        config_path = model_dir / "tokenizer_config.json"
         if config_path.exists():
             try:
                 cfg = json.loads(config_path.read_text())
@@ -731,10 +759,62 @@ class ConverterApp:
             has_template = True
 
         if has_template:
-            log("✓ 模型已包含 chat template", "info")
+            if modified_config:
+                log("✓ 模型已包含 chat template，已补充 eot_token", "info")
+            else:
+                log("✓ 模型已包含 chat template", "info")
+            return False, modified_config
+
+        # 检测是否为 Llama 3 架构（读 config.json）
+        is_llama3 = False
+        model_config_path = model_dir / "config.json"
+        if model_config_path.exists():
+            try:
+                cfg = json.loads(model_config_path.read_text())
+                model_type = cfg.get("model_type", "")
+                vocab_size = cfg.get("vocab_size", 0)
+                if model_type in ("llama",) and vocab_size == 128256:
+                    is_llama3 = True
+            except Exception:
+                pass
+
+        if not is_llama3:
+            log("⚠ 模型缺少 chat template，但非 Llama 3 架构，跳过自动注入", "warn")
+            return False, modified_config
+
+        # 注入 Llama 3 标准 chat template
+        template_path = model_dir / "chat_template.jinja"
+        template_path.write_text(self.LLAMA3_CHAT_TEMPLATE)
+        log("✓ 检测到 Llama 3 模型缺少 chat template，已自动注入标准模板", "success")
+        log("  → 已创建临时文件: chat_template.jinja", "info")
+        return True, modified_config
+
+    def _fix_gguf_eot_token(self, gguf_path: Path, model_dir: Path, log) -> bool:
+        """检查 GGUF 是否包含 eot_token_id，如果没有且为 Llama 3 模型则自动修复。
+        返回是否进行了修复。"""
+        # 用 gguf_dump 检查是否已有 eot_token_id
+        try:
+            import subprocess
+            llama_dir = Path(self.llama_cpp_path.get())
+            dump_script = llama_dir / "gguf-py" / "gguf" / "scripts" / "gguf_dump.py"
+            if not dump_script.exists():
+                log("⚠ 未找到 gguf_dump.py，跳过 eot_token_id 检查", "warn")
+                return False
+
+            result = subprocess.run(
+                [sys.executable, str(dump_script), str(gguf_path)],
+                capture_output=True, timeout=60
+            )
+            stdout = result.stdout.decode('utf-8', errors='replace')
+            if "eot_token_id" in stdout:
+                log("✓ GGUF 已包含 eot_token_id", "info")
+                return False
+        except Exception as e:
+            log(f"⚠ 检查 GGUF eot_token_id 失败: {e}", "warn")
             return False
 
         # 检测是否为 Llama 3 架构
+        config_path = model_dir / "config.json"
         is_llama3 = False
         if config_path.exists():
             try:
@@ -747,15 +827,58 @@ class ConverterApp:
                 pass
 
         if not is_llama3:
-            log("⚠ 模型缺少 chat template，但非 Llama 3 架构，跳过自动注入", "warn")
+            log("⚠ GGUF 缺少 eot_token_id，但非 Llama 3 架构，跳过修复", "warn")
             return False
 
-        # 注入 Llama 3 标准 chat template
-        template_path = model_dir / "chat_template.jinja"
-        template_path.write_text(self.LLAMA3_CHAT_TEMPLATE)
-        log("✓ 检测到 Llama 3 模型缺少 chat template，已自动注入标准模板", "success")
-        log("  → 已创建临时文件: chat_template.jinja", "info")
-        return True
+        # 使用 gguf_new_metadata.py 修复（加 eot_token_id + Llama 3 chat template）
+        log("⚠ GGUF 缺少 eot_token_id，正在修复…", "warn")
+        try:
+            new_metadata_script = llama_dir / "gguf-py" / "gguf" / "scripts" / "gguf_new_metadata.py"
+            if not new_metadata_script.exists():
+                log("⚠ 未找到 gguf_new_metadata.py，无法修复", "warn")
+                return False
+
+            # 创建临时 Llama 3 chat template 文件
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.jinja', delete=False) as f:
+                f.write(self.LLAMA3_CHAT_TEMPLATE)
+                template_path = f.name
+
+            fixed_path = gguf_path.with_suffix('.fixed.gguf')
+            cmd = [
+                sys.executable, str(new_metadata_script),
+                str(gguf_path), str(fixed_path),
+                "--chat-template-file", template_path,
+                "--special-token-by-id", "eot", "128009",
+                "--force"
+            ]
+            log(f"执行: {' '.join(cmd)}", "cmd")
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+
+            # 清理临时文件
+            try:
+                os.unlink(template_path)
+            except Exception:
+                pass
+
+            if result.returncode != 0:
+                log(f"修复失败: {result.stderr}", "error")
+                return False
+
+            if not fixed_path.exists():
+                log("修复后的文件未生成", "error")
+                return False
+
+            # 替换原文件
+            gguf_path.unlink()
+            fixed_path.rename(gguf_path)
+            log("✓ 已修复 GGUF：添加了 eot_token_id + Llama 3 chat template", "success")
+            return True
+
+        except Exception as e:
+            log(f"修复 GGUF 异常: {e}", "error")
+            return False
 
     def _run_conversion(self):
         llama_dir = Path(self.llama_cpp_path.get())
@@ -793,8 +916,8 @@ class ConverterApp:
         log(f"Python: {venv_python}")
         log("=" * 60)
 
-        # ── 检查并注入 chat template ──
-        injected_template = self._inject_chat_template_if_needed(model_dir, log)
+        # 注入 chat template 和 eot_token
+        injected_template, injected_config = self._inject_chat_template_if_needed(model_dir, log)
 
         # ── 步骤 1: 转换 GGUF (F16) ──
         status("步骤 1/2: 转换格式中…", 0)
@@ -809,15 +932,36 @@ class ConverterApp:
         try:
             self.process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1, cwd=str(llama_dir), env=env,
+                bufsize=0, cwd=str(llama_dir), env=env,
             )
-            for line in self.process.stdout:
+            buf = b""
+            while True:
                 if not self.is_running:
                     break
-                line = line.rstrip()
+                chunk = self.process.stdout.read(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                # 处理 \n 和 \r（tqdm 进度条用 \r 覆盖当前行）
+                while b"\n" in buf or b"\r" in buf:
+                    nl_pos = buf.find(b"\n")
+                    cr_pos = buf.find(b"\r")
+                    if nl_pos >= 0 and (cr_pos < 0 or nl_pos < cr_pos):
+                        raw_line, buf = buf[:nl_pos], buf[nl_pos+1:]
+                        line = raw_line.decode('utf-8', errors='replace').rstrip()
+                        if line:
+                            tag = "error" if "error" in line.lower() else ("warn" if "warn" in line.lower() else "info")
+                            log(line, tag)
+                    else:
+                        raw_line, buf = buf[:cr_pos], buf[cr_pos+1:]
+                        line = raw_line.decode('utf-8', errors='replace').rstrip()
+                        if line:
+                            tag = "error" if "error" in line.lower() else ("warn" if "warn" in line.lower() else "info")
+                            Q(self._log_replace, line, tag)
+            if buf:
+                line = buf.decode('utf-8', errors='replace').rstrip()
                 if line:
-                    tag = "error" if "error" in line.lower() else ("warn" if "warn" in line.lower() else "info")
-                    log(line, tag)
+                    log(line, "info")
             self.process.wait()
 
             if not self.is_running:
@@ -836,16 +980,31 @@ class ConverterApp:
             log(f"✓ F16 GGUF: {f16_output.name} ({f16_size:.2f} GB)", "success")
             status("步骤 1/2: 转换完成", 1)
 
+            # 检查并修复 eot_token_id（Llama 3 模型常见问题）
+            self._fix_gguf_eot_token(f16_output, model_dir, log)
+
         except Exception as e:
             log(f"转换异常: {e}", "error")
             Q(self._finish, "转换失败")
             return
         finally:
-            # 清理临时注入的 chat template
+            # 清理临时注入的文件
             if injected_template:
                 try:
                     (model_dir / "chat_template.jinja").unlink(missing_ok=True)
                     log("已清理临时 chat template 文件", "info")
+                except Exception:
+                    pass
+            if injected_config:
+                try:
+                    # 恢复 tokenizer_config.json（移除注入的 eot_token）
+                    config_path = model_dir / "tokenizer_config.json"
+                    if config_path.exists():
+                        cfg = json.loads(config_path.read_text())
+                        if "eot_token" in cfg:
+                            del cfg["eot_token"]
+                            config_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False))
+                            log("已恢复 tokenizer_config.json", "info")
                 except Exception:
                     pass
 
@@ -875,12 +1034,32 @@ class ConverterApp:
         try:
             self.process = subprocess.Popen(
                 cmd2, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1, env=env,
+                bufsize=0, env=env,
             )
-            for line in self.process.stdout:
+            buf = b""
+            while True:
                 if not self.is_running:
                     break
-                line = line.rstrip()
+                chunk = self.process.stdout.read(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                # 处理 \n 和 \r（tqdm 进度条用 \r 覆盖当前行）
+                while b"\n" in buf or b"\r" in buf:
+                    nl_pos = buf.find(b"\n")
+                    cr_pos = buf.find(b"\r")
+                    if nl_pos >= 0 and (cr_pos < 0 or nl_pos < cr_pos):
+                        raw_line, buf = buf[:nl_pos], buf[nl_pos+1:]
+                        line = raw_line.decode('utf-8', errors='replace').rstrip()
+                        if line:
+                            log(line, "info")
+                    else:
+                        raw_line, buf = buf[:cr_pos], buf[cr_pos+1:]
+                        line = raw_line.decode('utf-8', errors='replace').rstrip()
+                        if line:
+                            Q(self._log_replace, line, "info")
+            if buf:
+                line = buf.decode('utf-8', errors='replace').rstrip()
                 if line:
                     log(line, "info")
             self.process.wait()
